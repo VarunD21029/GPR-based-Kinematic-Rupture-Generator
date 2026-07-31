@@ -1,0 +1,9 @@
+# Pinned to match the environment the GPR model (models/gpr_model.pkl) was
+# trained and pickled in. Loading with a different scikit-learn version
+# will still work but may raise an InconsistentVersionWarning and can
+# subtly change prediction results - keep these pinned unless you retrain.
+
+numpy>=1.26,<2.0
+pandas>=2.0,<3.0
+scikit-learn==1.7.1
+joblib>=1.3,<2.0
