@@ -121,6 +121,9 @@ several diagnostic files (see `docs/slipgen_format.md`).
   serialized model artifacts. If you have the notebook/script that
   produced them, consider adding it under a `training/` directory so
   the model can be reproduced or retrained.
+## Training Dataset
+
+Model training dataset can be accessed through this link: https://github.com/VarunD21029/LME-Source-Scaling-Relations/blob/main/supplementary_data_revised.xlsx
 
 ## License
 
