@@ -62,30 +62,6 @@ nm_col      = metadata['nm_col']        # column name for "NM" categorical featu
 n_out       = len(target_cols)          # number of output targets the GPR predicts
 
 # =====================================================================
-# SEISMIC-MOMENT CONSISTENCY
-# =====================================================================
-# The GPR predicts the rupture dimensions and the mean slip independently,
-# so their product is not guaranteed to reproduce the seismic moment of the
-# target magnitude. Following the rupture generator of Mai & Beroza
-# (RUPGEN; CalcDimfromM.m / SlipReal.m), the slip can be scaled so that
-#
-#       M0 = mu * L_eff * W_eff * D
-#
-# matches the target moment exactly (see `slip_scaling` in run_pipeline).
-MU_DEFAULT = 3.3e10      # rigidity / shear modulus (Pa); change via run_pipeline(mu=...)
-
-
-def mw_to_m0(Mw):
-    """Seismic moment (N m) for a moment magnitude (Hanks & Kanamori, 1979)."""
-    return 10.0 ** (1.5 * Mw + 9.05)
-
-
-def m0_to_mw(M0):
-    """Moment magnitude for a seismic moment in N m (Hanks & Kanamori, 1979)."""
-    return (np.log10(M0) - 9.05) / 1.5
-
-
-# =====================================================================
 # 2. GPR PREDICTION FUNCTION
 # =====================================================================
 def predict_new_gpr(Mw_new, SVT_new, FM_new, TS_new, NM_new):
@@ -352,8 +328,7 @@ def write_fault_in(fault_L, fault_W, A_ALA, A_AVLA, mean_slip, std_slip,
 def run_pipeline(Mw, SVT, FM, TS, NM, grid_N=512, H=0.7,
                  model_choice="von_karman",
                  anchor="random", avla_anchor="random", n_blocks=5,
-                 output_path="slipgen.in",
-                 mu=MU_DEFAULT, slip_scaling="moment"):
+                 output_path="slipgen.in"):
     """
     End-to-end pipeline: given earthquake scenario inputs, use the trained
     GPR model to predict fault geometry / asperity / slip statistics, then
@@ -370,17 +345,7 @@ def run_pipeline(Mw, SVT, FM, TS, NM, grid_N=512, H=0.7,
     avla_anchor  : str   - AVLA placement strategy (see get_coords)
     n_blocks     : int   - base coarse block count along strike
     output_path  : str   - where to write the generated slipgen.in file
-    mu           : float - rigidity / shear modulus in Pa (default 3.3e10)
-    slip_scaling : str   - how the mean slip is set:
-                            "moment" (default): the GPR-predicted mean slip
-                                and its standard deviation are scaled by a
-                                common factor so that mu * L * W * D equals
-                                the seismic moment of the target Mw;
-                            "gpr": the GPR-predicted mean slip is used as
-                                is, and the resulting Mw is reported.
     """
-    if slip_scaling not in ("moment", "gpr"):
-        raise ValueError("slip_scaling must be 'moment' or 'gpr'")
 
     print(f"--- Running Pipeline for Mw={Mw}, FM={FM} ---")
 
@@ -436,26 +401,6 @@ def run_pipeline(Mw, SVT, FM, TS, NM, grid_N=512, H=0.7,
         print(f"Available targets are: {gpr_preds['Target'].tolist()}")
         return
 
-    # SEISMIC-MOMENT CONSISTENCY
-    # Moment implied by the independently predicted dimensions and slip,
-    # compared with the moment of the target magnitude.
-    M0_target = mw_to_m0(Mw)
-    M0_gpr    = mu * (pred_L * 1e3) * (pred_W * 1e3) * pred_D_m
-    Mw_gpr    = m0_to_mw(M0_gpr)
-    print(f"Moment check -> target Mw={Mw:.2f} (M0={M0_target:.3e} Nm), "
-          f"GPR parameters give Mw={Mw_gpr:.2f} (M0={M0_gpr:.3e} Nm), mu={mu:.2e} Pa")
-
-    if slip_scaling == "moment":
-        # Scale the mean slip so that the target moment is met exactly. The
-        # standard deviation is scaled by the same factor, which is equivalent
-        # to rescaling the whole slip field and keeps its relative variability.
-        scale       = M0_target / M0_gpr
-        pred_D_m   *= scale
-        pred_Std_m *= scale
-        print(f"              slip scaled by {scale:.3f} to match the target moment")
-    else:
-        print(f"              slip not scaled: the slip field corresponds to Mw={Mw_gpr:.2f}")
-
     # Log a concise summary of all the GPR-derived scenario parameters
     # before generating the fault input file.
     print(f"GPR Output -> L={pred_L:.2f}km, W={pred_W:.2f}km")
@@ -504,8 +449,4 @@ if __name__ == "__main__":
 
         # --- NEW SETTINGS ---
         model_choice = "von_karman",      # Choose: "von_karman", "exponential", "gaussian"
-
-        # --- SEISMIC-MOMENT CONSISTENCY ---
-        mu           = 3.3e10,            # rigidity (Pa)
-        slip_scaling = "moment",          # "moment": scale slip to the target Mw; "gpr": use GPR slip as is
     )
