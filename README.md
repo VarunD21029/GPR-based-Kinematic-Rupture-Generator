@@ -89,8 +89,32 @@ run_pipeline(
     model_choice="von_karman", # "von_karman", "exponential", or "gaussian"
     n_blocks=5,                 # 3, 4, or 5 recommended; higher gives unrealistic slips
     output_path="slipgen.in",
+    mu=3.3e10,                  # rigidity (Pa)
+    slip_scaling="moment",      # "moment" or "gpr" (see below)
 )
 ```
+
+### Seismic-moment consistency
+
+The GPR predicts the effective rupture dimensions and the mean slip
+independently, so their product does not necessarily reproduce the
+seismic moment of the target magnitude. Following the rupture generator
+of Mai & Beroza (RUPGEN), `run_pipeline` offers two options through
+`slip_scaling`:
+
+- `"moment"` (default): the GPR-predicted mean slip and its standard
+  deviation are scaled by a common factor so that
+  `M0 = mu * L_eff * W_eff * D` equals the seismic moment of the target
+  `Mw`. The generated slip field then releases exactly the target moment.
+- `"gpr"`: the GPR-predicted mean slip is used as is, and the moment
+  magnitude that the slip field actually corresponds to is printed.
+
+The rigidity `mu` defaults to 3.3e10 Pa and can be changed through the
+`mu` argument. The moment is computed from the magnitude as
+`log10(M0) = 1.5 Mw + 9.05` (N m; Hanks & Kanamori, 1979). In both
+modes the Fortran program preserves the mean slip written to
+`slipgen.in`, so every slip realization of a scenario releases the same
+moment regardless of the asperity location.
 
 ### 2. Run the Fortran slip generator
 
