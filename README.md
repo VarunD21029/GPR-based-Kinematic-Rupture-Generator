@@ -101,6 +101,15 @@ run_pipeline(
 This reads `slipgen.in` and produces the correlated slip field plus
 several diagnostic files (see `docs/slipgen_format.md`).
 
+### Optional seismic-moment consistency
+
+The `main` branch uses the GPR-predicted mean slip. An option that
+scales the mean slip so that `mu * L_eff * W_eff * D` matches the
+seismic moment of the target `Mw` (following Mai & Beroza's RUPGEN, with
+a user-defined rigidity `mu`, default 3.3e10 Pa) is available on the
+[`moment-consistency`](https://github.com/VarunD21029/GPR-based-Kinematic-Rupture-Generator/tree/moment-consistency)
+branch.
+
 ## Model notes
 
 - The GPR model was trained with **scikit-learn 1.7.1** (pinned in
