@@ -130,6 +130,46 @@ def predict_new_gpr(Mw_new, SVT_new, FM_new, TS_new, NM_new):
     })
 
 # =====================================================================
+# 2b. JOINT SAMPLING OF THE SCALING PARAMETERS (OPTIONAL ENSEMBLES)
+# =====================================================================
+# Correlation matrix of the GPR residuals (observed minus GPR-predicted
+# log10 values of the scaling parameters in the training database), written
+# by src/compute_residual_correlation.py. It preserves the inter-dependence
+# of the parameters (e.g. a rupture wider than predicted tends to have a
+# smaller mean slip) when they are sampled from the predictive distribution.
+RESIDUAL_CORR_FILE = os.path.join(MODEL_DIR, "gpr_residual_correlation.csv")
+
+
+def sample_parameter_sets(gpr_preds, targets, n_samples, seed=None, truncate=2.0):
+    """
+    Draw parameter sets jointly from the GPR predictive distribution:
+
+        log10(theta_i) = mu_i + sigma_i * z_i,   z ~ N(0, R)
+
+    where mu_i and sigma_i are the GPR predictive mean and standard deviation
+    (log10) of target i, and R is the residual correlation matrix restricted
+    to `targets`. Draws with any |z_i| > truncate are rejected (truncated
+    multivariate normal).
+
+    Returns a DataFrame with one row per sampled set and one column per
+    target, in linear units (same units as Predicted_linear).
+    """
+    if not os.path.exists(RESIDUAL_CORR_FILE):
+        raise FileNotFoundError(f"{RESIDUAL_CORR_FILE} not found; run src/compute_residual_correlation.py first.")
+    corr = pd.read_csv(RESIDUAL_CORR_FILE, index_col=0).loc[targets, targets].to_numpy()
+    p = gpr_preds.set_index("Target").loc[targets]
+    mu, sd = p["Predicted_log10"].to_numpy(), p["Uncertainty_log10"].to_numpy()
+    chol = np.linalg.cholesky(corr)
+    rng = np.random.default_rng(seed)
+    z_sets = []
+    while len(z_sets) < n_samples:
+        z = chol @ rng.standard_normal(len(targets))
+        if truncate is None or np.all(np.abs(z) <= truncate):
+            z_sets.append(z)
+    return pd.DataFrame(10 ** (mu + sd * np.array(z_sets)), columns=targets)
+
+
+# =====================================================================
 # 3. GENERATE slipgen.in (SQUARE ALA, EXACT-BLOCK AVLA, RANDOM ANCHORS)
 # =====================================================================
 def write_fault_in(fault_L, fault_W, A_ALA, A_AVLA, mean_slip, std_slip,
@@ -328,11 +368,18 @@ def write_fault_in(fault_L, fault_W, A_ALA, A_AVLA, mean_slip, std_slip,
 def run_pipeline(Mw, SVT, FM, TS, NM, grid_N=512, H=0.7,
                  model_choice="von_karman",
                  anchor="random", avla_anchor="random", n_blocks=5,
-                 output_path="slipgen.in"):
+                 output_path="slipgen.in",
+                 n_samples=0, sample_seed=None, truncate=2.0, output_dir="ensemble"):
     """
     End-to-end pipeline: given earthquake scenario inputs, use the trained
     GPR model to predict fault geometry / asperity / slip statistics, then
     generate the corresponding "slipgen.in" file.
+
+    By default (n_samples=0) the GPR median predictions are used and a single
+    file is written to `output_path`. With n_samples=N > 0, N parameter sets
+    are drawn jointly from the GPR predictive distribution (see
+    sample_parameter_sets) and one file per set is written to `output_dir`
+    (slipgen_001.in, ...), together with sampled_parameters.csv.
 
     Parameters
     ----------
@@ -344,7 +391,11 @@ def run_pipeline(Mw, SVT, FM, TS, NM, grid_N=512, H=0.7,
     anchor       : str   - ALA placement strategy (see get_coords)
     avla_anchor  : str   - AVLA placement strategy (see get_coords)
     n_blocks     : int   - base coarse block count along strike
-    output_path  : str   - where to write the generated slipgen.in file
+    output_path  : str   - where to write the generated slipgen.in file (median mode)
+    n_samples    : int   - number of jointly sampled parameter sets (0 = median only)
+    sample_seed  : int   - random seed for the sampling (None = not reproducible)
+    truncate     : float - truncation of the sampled standard-normal values (in sigma)
+    output_dir   : str   - folder for the ensemble files (sampling mode)
     """
 
     print(f"--- Running Pipeline for Mw={Mw}, FM={FM} ---")
@@ -401,6 +452,29 @@ def run_pipeline(Mw, SVT, FM, TS, NM, grid_N=512, H=0.7,
         print(f"Available targets are: {gpr_preds['Target'].tolist()}")
         return
 
+    # OPTIONAL: ENSEMBLE OF JOINTLY SAMPLED PARAMETER SETS
+    if n_samples and n_samples > 0:
+        patterns = ['Eff.*Length', 'Eff.*Width', 'Eff Mean Slip', 'Eff Standard Deviation',
+                    'Area of large asperity', 'Area of.*very large asperity', ax_target, az_target]
+        names = [gpr_preds.loc[gpr_preds['Target'].str.contains(pt, regex=True), 'Target'].values[0] for pt in patterns]
+        sets = sample_parameter_sets(gpr_preds, names, n_samples, seed=sample_seed, truncate=truncate)
+        sets.columns = ['L_km', 'W_km', 'D_cm', 'sigma_D_cm', 'A_LA_km2', 'A_VLA_km2', 'ax_km', 'az_km']
+        os.makedirs(output_dir, exist_ok=True)
+        for i, row in sets.iterrows():
+            a_vla = row['A_VLA_km2'] if row['A_VLA_km2'] <= row['A_LA_km2'] else 0.80 * row['A_LA_km2']   # same safeguard as below
+            sets.loc[i, 'A_VLA_km2'] = a_vla
+            print(f"Sampled set {i + 1}/{n_samples}: L={row['L_km']:.1f}km, W={row['W_km']:.1f}km, "
+                  f"D={row['D_cm'] / 100:.3f}m, sigma={row['sigma_D_cm'] / 100:.3f}m")
+            write_fault_in(fault_L=row['L_km'], fault_W=row['W_km'], A_ALA=row['A_LA_km2'], A_AVLA=a_vla,
+                           mean_slip=row['D_cm'] / 100.0, std_slip=row['sigma_D_cm'] / 100.0,
+                           ax=row['ax_km'], az=row['az_km'], itype=itype, grid_N=grid_N, n_blocks=n_blocks, H=H,
+                           anchor=anchor, avla_anchor=avla_anchor,
+                           output_path=os.path.join(output_dir, f"slipgen_{i + 1:03d}.in"))
+        sets.index = [f"slipgen_{i + 1:03d}.in" for i in range(n_samples)]
+        sets.to_csv(os.path.join(output_dir, "sampled_parameters.csv"), float_format="%.4f")
+        print(f"Wrote {n_samples} jointly sampled parameter sets to '{output_dir}'")
+        return sets
+
     # Log a concise summary of all the GPR-derived scenario parameters
     # before generating the fault input file.
     print(f"GPR Output -> L={pred_L:.2f}km, W={pred_W:.2f}km")
@@ -449,4 +523,10 @@ if __name__ == "__main__":
 
         # --- NEW SETTINGS ---
         model_choice = "von_karman",      # Choose: "von_karman", "exponential", "gaussian"
+
+        # --- OPTIONAL ENSEMBLE (uncomment to sample the GPR predictive distribution) ---
+        # n_samples   = 10,               # number of jointly sampled parameter sets
+        # sample_seed = 2026,             # for reproducible ensembles
+        # truncate    = 2.0,              # reject draws beyond +/- 2 sigma
+        # output_dir  = "ensemble",
     )

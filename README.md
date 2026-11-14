@@ -18,9 +18,11 @@ program** → correlated slip grid.
 │   ├── gpr_mw_scaler.pkl        # Scaler fit on the Mw (magnitude) input
 │   ├── gpr_ohe.pkl              # OneHotEncoder fit on the categorical inputs (SVT, FM, TS, NM)
 │   ├── gpr_y_scaler.pkl         # Scaler used to inverse-transform target predictions
-│   └── gpr_metadata.pkl         # Column names, target names, valid categorical values, fixed defaults
+│   ├── gpr_metadata.pkl         # Column names, target names, valid categorical values, fixed defaults
+│   └── gpr_residual_correlation.csv  # Correlation matrix of the GPR residuals (used for ensembles)
 ├── src/
 │   ├── run_pipeline.py          # Main Python pipeline (load model → predict → write slipgen.in)
+│   ├── compute_residual_correlation.py  # Rebuilds models/gpr_residual_correlation.csv
 │   └── slipgen_von_karman.f90   # Fortran spatial-correlation slip generator (consumes slipgen.in)
 ├── examples/
 │   └── slipgen.in.example       # Sample generated input file, for reference
@@ -100,6 +102,40 @@ run_pipeline(
 
 This reads `slipgen.in` and produces the correlated slip field plus
 several diagnostic files (see `docs/slipgen_format.md`).
+
+### Optional ensembles of slip realizations
+
+By default the pipeline uses the GPR **median** predictions. To propagate
+the GPR uncertainty, set `n_samples` to draw parameter sets jointly from
+the GPR predictive distribution:
+
+    log10(theta_i) = mu_i + sigma_i * z_i,   z ~ N(0, R)
+
+where `mu_i` and `sigma_i` are the GPR predictive mean and standard
+deviation (log10) of each scaling parameter, and `R` is the correlation
+matrix of the GPR residuals (observed minus predicted values in the
+training database, `models/gpr_residual_correlation.csv`). Sampling with
+`R` preserves the inter-dependence of the parameters (e.g. a correlation
+of -0.82 between effective width and mean slip), so physically
+inconsistent combinations are avoided. Draws beyond `truncate` standard
+deviations are rejected.
+
+```python
+run_pipeline(
+    Mw=7.5, SVT="asymetriccosine ", FM="ss", TS="0", NM="1",
+    anchor="middle", avla_anchor="middle",
+    n_samples=10,          # number of jointly sampled parameter sets
+    sample_seed=2026,      # reproducible ensemble
+    truncate=2.0,          # truncate at +/- 2 sigma
+    output_dir="ensemble", # slipgen_001.in ... + sampled_parameters.csv
+)
+```
+
+Run the same call with each asperity anchor (`"top-left"`, `"top-right"`,
+`"middle"`, `"bottom-left"`, `"bottom-right"`) and the same `sample_seed`
+to combine every sampled parameter set with every asperity location.
+If the GPR model is retrained, regenerate the correlation matrix with
+`python src/compute_residual_correlation.py`.
 
 ### Optional seismic-moment consistency
 
